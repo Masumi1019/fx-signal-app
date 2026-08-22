@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FX Signal</title>
+<title>FX SIGNAL</title>
+
 <style>
 body {
   font-family: sans-serif;
@@ -11,18 +12,24 @@ body {
   margin: 0;
   padding: 20px;
 }
+
 .card {
   background: white;
   padding: 20px;
   border-radius: 16px;
   margin-bottom: 15px;
 }
+
 h1 { margin-bottom: 5px; }
+
 .signal {
   font-size: 32px;
   font-weight: bold;
 }
+
 .wait { color: #777; }
+.buy { color: #16883c; }
+.sell { color: #d32f2f; }
 </style>
 </head>
 
@@ -32,22 +39,191 @@ h1 { margin-bottom: 5px; }
 <p>USD/JPY トレード判断</p>
 
 <div class="card">
-<h2>15分足</h2>
-<p>ダウ理論：―</p>
-<p>水平線：―</p>
-<p>移動平均線：―</p>
-<p>RSI：―</p>
+  <h2>15分足</h2>
+  <p>現在値：<span id="price">—</span></p>
+  <p>ダウ理論：<span id="dow">—</span></p>
+  <p>水平線：<span id="level">—</span></p>
+  <p>移動平均線：<span id="ma">—</span></p>
+  <p>RSI：<span id="rsi">—</span></p>
 </div>
 
 <div class="card">
-<h2>5分足</h2>
-<p>エントリータイミング：待機</p>
+  <h2>5分足</h2>
+  <p>エントリータイミング：<span id="entry">待機</span></p>
 </div>
 
 <div class="card">
-<h2>総合判定</h2>
-<div class="signal wait">⚪ WAIT</div>
+  <h2>総合判定</h2>
+  <div id="signal" class="signal wait">⚪ WAIT</div>
 </div>
+
+<script>
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getCandles(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.values)) return data.values;
+  if (Array.isArray(data.data)) return data.data;
+  return [];
+}
+
+async function updateSignal() {
+  try {
+    const response = await fetch("./data.json?t=" + Date.now(), {
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      throw new Error("data.jsonを取得できません");
+    }
+
+    const data = await response.json();
+    const candles = getCandles(data);
+
+    if (candles.length < 20) {
+      throw new Error("ローソク足データが不足しています");
+    }
+
+    const rows = candles
+      .map(c => ({
+        open: num(c.open),
+        high: num(c.high),
+        low: num(c.low),
+        close: num(c.close)
+      }))
+      .filter(c =>
+        c.open !== null &&
+        c.high !== null &&
+        c.low !== null &&
+        c.close !== null
+      );
+
+    if (rows.length < 20) {
+      throw new Error("価格データを読み取れません");
+    }
+
+    const latest = rows[rows.length - 1];
+    const closes = rows.map(c => c.close);
+
+    document.getElementById("price").textContent =
+      latest.close.toFixed(3);
+
+    const recent = rows.slice(-6);
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+
+    let trend = "レンジ";
+    if (last.high > first.high && last.low > first.low) {
+      trend = "上昇";
+    } else if (last.high < first.high && last.low < first.low) {
+      trend = "下降";
+    }
+
+    document.getElementById("dow").textContent = trend;
+
+    const maPeriod = 20;
+    const ma20 =
+      closes.slice(-maPeriod).reduce((a, b) => a + b, 0) / maPeriod;
+
+    document.getElementById("ma").textContent =
+      latest.close > ma20
+        ? "価格はMA20より上"
+        : latest.close < ma20
+        ? "価格はMA20より下"
+        : "MA20付近";
+
+    const lookback = rows.slice(-20);
+    const resistance = Math.max(...lookback.map(c => c.high));
+    const support = Math.min(...lookback.map(c => c.low));
+
+    const distResistance = Math.abs(resistance - latest.close);
+    const distSupport = Math.abs(latest.close - support);
+
+    document.getElementById("level").textContent =
+      distSupport < distResistance
+        ? "サポート " + support.toFixed(3)
+        : "レジスタンス " + resistance.toFixed(3);
+
+    let gains = 0;
+    let losses = 0;
+
+    const rsiPeriod = 14;
+    const rsiCloses = closes.slice(-(rsiPeriod + 1));
+
+    for (let i = 1; i < rsiCloses.length; i++) {
+      const diff = rsiCloses[i] - rsiCloses[i - 1];
+
+      if (diff > 0) gains += diff;
+      if (diff < 0) losses += Math.abs(diff);
+    }
+
+    const avgGain = gains / rsiPeriod;
+    const avgLoss = losses / rsiPeriod;
+
+    let rsi;
+
+    if (avgLoss === 0) {
+      rsi = 100;
+    } else {
+      const rs = avgGain / avgLoss;
+      rsi = 100 - 100 / (1 + rs);
+    }
+
+    document.getElementById("rsi").textContent =
+      rsi.toFixed(1);
+
+    let signal = "WAIT";
+    let entry = "待機";
+
+    if (
+      trend === "上昇" &&
+      latest.close > ma20 &&
+      rsi >= 50 &&
+      rsi < 70
+    ) {
+      signal = "BUY";
+      entry = "買い候補";
+    }
+
+    if (
+      trend === "下降" &&
+      latest.close < ma20 &&
+      rsi <= 50 &&
+      rsi > 30
+    ) {
+      signal = "SELL";
+      entry = "売り候補";
+    }
+
+    document.getElementById("entry").textContent = entry;
+
+    const signalEl = document.getElementById("signal");
+
+    if (signal === "BUY") {
+      signalEl.textContent = "🟢 BUY";
+      signalEl.className = "signal buy";
+    } else if (signal === "SELL") {
+      signalEl.textContent = "🔴 SELL";
+      signalEl.className = "signal sell";
+    } else {
+      signalEl.textContent = "⚪ WAIT";
+      signalEl.className = "signal wait";
+    }
+
+  } catch (error) {
+    console.error(error);
+
+    document.getElementById("signal").textContent =
+      "⚠️ DATA ERROR";
+  }
+}
+
+updateSignal();
+setInterval(updateSignal, 60000);
+</script>
 
 </body>
 </html>
