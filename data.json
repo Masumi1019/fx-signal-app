@@ -1,1 +1,1 @@
-error code: 502
+{"code":500,"message":"Quota API is not available","status":"error"}
